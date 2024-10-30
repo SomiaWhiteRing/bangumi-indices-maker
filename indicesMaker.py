@@ -248,9 +248,9 @@ def batch_add_to_index(index_id, games, access_token):
             if game.get('updated_at'):
                 comment_parts.append(f"标记时间: {format_time(game['updated_at'])}")
             if game.get('comment'):
-                # 清理��论文本，移除特殊字符
+                # 清理评论文本，移除特殊字符
                 cleaned_comment = game['comment'].replace('\n', ' ').replace('\r', ' ')
-                comment_parts.append(f"吐槽: {cleaned_comment}")
+                comment_parts.append(f"吐嘈: {cleaned_comment}")
             comment = " | ".join(comment_parts)
             
             subjects.append({

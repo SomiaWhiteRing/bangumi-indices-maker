@@ -34,10 +34,10 @@ pip install -r requirements.txt
 
 ```json
 {
-  "user_id": "你的Bangumi用户名",
-  "access_token": "你的API访问令牌",
-  "indice_id": "目录ID",
-  "user_agent": "你的应用名称/版本"
+  "user_id": "填写你的用户ID（https://bangumi.tv/user/***）",
+  "indice_id": "填写你的目录ID（https://bangumi.tv/index/***）",
+  "access_token": "从此处获取→https://next.bgm.tv/demo/access-token",
+  "user_agent": "参照此处填写→https://github.com/bangumi/api/blob/master/docs-raw/user%20agent.md"
 }
 ```
 
