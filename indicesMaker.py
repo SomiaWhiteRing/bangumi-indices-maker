@@ -250,7 +250,7 @@ def batch_add_to_index(index_id, games, access_token):
             if game.get('comment'):
                 # 清理评论文本，移除特殊字符
                 cleaned_comment = game['comment'].replace('\n', ' ').replace('\r', ' ')
-                comment_parts.append(f"评价: {cleaned_comment}")
+                comment_parts.append(f"吐槽: {cleaned_comment}")
             comment = " | ".join(comment_parts)
             
             subjects.append({
@@ -304,18 +304,29 @@ def update_index_description(index_id, access_token):
         return False
         
     index_info = response.json()
-    description = index_info.get('description', '')
+    current_description = index_info.get('desc', '')
+    current_title = index_info.get('title', '')
     
-    # 移除旧的更新时间（如果存在）
-    description = description.split('\n最近更新时间：')[0].rstrip()
-    
-    # 添加新的更新时间
+    # 获取当前时间
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    new_description = f"{description}\n最近更新时间：{current_time}"
+    update_line = f"最近更新时间：{current_time}"
+    
+    # 将描述分割成行，处理所有可能的换行符
+    lines = current_description.replace('\r\n', '\n').split('\n')
+    
+    # 检查最后一行是否包含更新时间
+    if lines and lines[-1].startswith("最近更新时间："):
+        lines[-1] = update_line
+    else:
+        lines.append(update_line)
+    
+    # 重新组合描述，使用单个换行符
+    new_description = '\n'.join(lines)
     
     # 更新目录描述
     update_url = f'https://api.bgm.tv/v0/indices/{index_id}'
     update_data = {
+        'title': current_title,
         'description': new_description
     }
     
@@ -323,6 +334,12 @@ def update_index_description(index_id, access_token):
     
     if response.status_code not in [200, 204]:
         print("错误: 更新目录描述失败")
+        if response.text:
+            try:
+                error_data = response.json()
+                print(f"错误详情: {error_data}")
+            except:
+                print(f"错误详情: {response.text}")
         return False
         
     return True
@@ -384,10 +401,6 @@ def main():
     
     # 获取目录中的现有条目
     current_index_items = get_index_items(config['indice_id'], config['access_token'])
-    
-    # 打印一个条目的内容以便调试
-    if current_index_items:
-        print("目录条目示例:", current_index_items[0])
     
     # 获取现有条目ID（添加错误处理）
     current_index_ids = set()
