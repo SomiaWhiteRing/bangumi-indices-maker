@@ -3,7 +3,7 @@ import json
 import time
 import os
 from tqdm import tqdm
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import dateutil.parser
 
 def load_cache():
@@ -248,7 +248,7 @@ def batch_add_to_index(index_id, games, access_token):
             if game.get('updated_at'):
                 comment_parts.append(f"标记时间: {format_time(game['updated_at'])}")
             if game.get('comment'):
-                # 清理评论文本，移除特殊字符
+                # 清理��论文本，移除特殊字符
                 cleaned_comment = game['comment'].replace('\n', ' ').replace('\r', ' ')
                 comment_parts.append(f"吐槽: {cleaned_comment}")
             comment = " | ".join(comment_parts)
@@ -307,9 +307,10 @@ def update_index_description(index_id, access_token):
     current_description = index_info.get('desc', '')
     current_title = index_info.get('title', '')
     
-    # 获取当前时间
-    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    update_line = f"最近更新时间：{current_time}"
+    # 获取当前UTC时间并转换为北京时间
+    current_time_utc = datetime.now(timezone.utc)
+    current_time_beijing = current_time_utc.astimezone(timezone(timedelta(hours=8)))
+    update_line = f"最近更新时间：{current_time_beijing.strftime('%Y-%m-%d %H:%M:%S')}"
     
     # 将描述分割成行，处理所有可能的换行符
     lines = current_description.replace('\r\n', '\n').split('\n')

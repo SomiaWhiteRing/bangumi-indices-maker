@@ -23,6 +23,13 @@
 pip install -r requirements.txt
 ```
 
+所需依赖包：
+- requests: HTTP 请求
+- beautifulsoup4: HTML 解析
+- lxml: 快速 XML/HTML 解析器
+- tqdm: 进度条显示
+- python-dateutil: 日期时间处理
+
 2. 复制 `config_example.json` 为 `config.json`，并填入以下信息：
 
 ```json
