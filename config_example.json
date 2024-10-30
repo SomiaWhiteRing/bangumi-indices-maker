@@ -1,0 +1,6 @@
+{
+  "user_id": "填写你的用户ID（https://bangumi.tv/user/***）",
+  "indice_id": "填写你的目录ID（https://bangumi.tv/index/***）",
+  "access_token": "从此处获取→https://next.bgm.tv/demo/access-token",
+  "user_agent": "参照此处填写→https://github.com/bangumi/api/blob/master/docs-raw/user%20agent.md"
+}
