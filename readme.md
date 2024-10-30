@@ -15,6 +15,8 @@
 
 ## 使用方法
 
+### 本地运行
+
 1. 安装依赖：
 
 ```bash
@@ -38,12 +40,27 @@ pip install -r requirements.txt
 python indicesMaker.py
 ```
 
-## 注意事项
+### 使用 GitHub Actions 自动运行
 
-- 需要有效的 Bangumi API 访问令牌
-- 请遵守 API 的访问频率限制
-- 建议定期运行以保持目录更新
-- 首次运行可能需要较长时间来建立缓存
+本项目支持使用 GitHub Actions 进行自动更新。设置步骤如下：
+
+1. Fork 本仓库到你的 GitHub 账号下
+
+2. 在你的仓库中，进入 Settings -> Secrets and variables -> Actions
+
+3. 点击 "New repository secret"，添加以下 secret：
+   - 名称：`CONFIG_JSON`
+   - 值：将你的 `config.json` 完整内容复制粘贴到这里
+
+4. Actions 会在每天北京时间凌晨 0:00 自动运行
+
+5. 你也可以在 Actions 页面手动触发运行
+
+### 注意事项
+
+- 请确保你的 access_token 有足够的权限
+- 首次运行 Actions 时需要在 Actions 页面手动允许工作流运行
+- 如需修改运行时间，可编辑 `.github/workflows/daily-update.yml` 文件中的 cron 表达式
 
 ## 贡献指南
 
