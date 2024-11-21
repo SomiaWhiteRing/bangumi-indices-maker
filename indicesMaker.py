@@ -136,28 +136,40 @@ def get_index_items(index_id, access_token):
         'Authorization': f'Bearer {access_token}'
     }
     
-    url = f'https://api.bgm.tv/v0/indices/{index_id}/subjects'
-    response = requests.get(url, headers=headers)
-    
-    if response.status_code != 200:
-        print(f"错误: 无法获取目录内容 (状态码: {response.status_code})")
-        return []
+    all_items = []
+    offset = 0
+    limit = 30  # API默认限制
+
+    while True:
+        url = f'https://api.bgm.tv/v0/indices/{index_id}/subjects?limit={limit}&offset={offset}'
+        response = requests.get(url, headers=headers)
         
-    # 解析JSON响应
-    try:
-        data = response.json()
-        # 如果返回的是列表，直接返回
-        if isinstance(data, list):
-            return data
-        # 如果返回的是对象且包含data字段，返回data字段
-        elif isinstance(data, dict) and 'data' in data:
-            return data['data']
-        else:
-            print("错误: 无法解析目录内容的返回格式")
+        if response.status_code != 200:
+            print(f"错误: 无法获取目录内容 (状态码: {response.status_code})")
             return []
-    except json.JSONDecodeError:
-        print("错误: 返回的不是有效的JSON数据")
-        return []
+            
+        try:
+            data = response.json()
+            if not isinstance(data, dict) or 'data' not in data:
+                print("错误: 返回数据格式不正确")
+                return []
+                
+            items = data['data']
+            all_items.extend(items)
+            
+            # 检查是否还有更多数据
+            total = data.get('total', 0)
+            if offset + limit >= total:
+                break
+                
+            offset += limit
+            time.sleep(0.5)  # 添加延时避免请求过快
+            
+        except json.JSONDecodeError:
+            print("错误: 返回的不是有效的JSON数据")
+            return []
+            
+    return all_items
 
 def update_index(index_id, subject_id, comment, sort_order, access_token, is_add=True):
     """添加或编辑目录条目"""
@@ -403,14 +415,18 @@ def main():
     # 获取目录中的现有条目
     current_index_items = get_index_items(config['indice_id'], config['access_token'])
     
-    # 获取现有条目ID（添加错误处理）
+    # 获取现有条目ID（添加更多调试信息）
     current_index_ids = set()
+    print("\n当前目录中的条目:")
     for item in current_index_items:
         try:
-            # 根据实际返回的数据结构调整访问方式
-            subject_id = item.get('subject_id')  # 或者可能是其他键名
-            if subject_id:
-                current_index_ids.add(subject_id)
+            if isinstance(item, dict):
+                subject_id = item.get('id')  # 注意：API返回的是'id'而不是'subject_id'
+                if subject_id:
+                    current_index_ids.add(subject_id)
+                    print(f"- ID: {subject_id} ({item.get('name', '未知名称')})")
+            else:
+                print(f"警告: 目录条目格式错误: {item}")
         except Exception as e:
             print(f"警告: 处理目录条目时出错: {e}")
             print(f"问题条目内容: {item}")
@@ -418,9 +434,13 @@ def main():
     
     # 获取要添加的游戏ID列表
     new_game_ids = set(game['subject']['id'] for game in unique_games)
+    print("\n准备添加的游戏:")
+    for game in unique_games:
+        print(f"- ID: {game['subject']['id']} ({game['subject'].get('name', '未知名称')})")
     
     # 需要移除的条目
     to_remove_ids = current_index_ids - new_game_ids
+    print(f"\n需要移除的条目: {to_remove_ids}")
     
     # 需要添加或更新的条目
     to_update_games = unique_games  # 所有游戏都需要更新
@@ -429,7 +449,8 @@ def main():
     if to_remove_ids:
         print(f"\n正在移除 {len(to_remove_ids)} 个不再符合条件的条目...")
         for subject_id in tqdm(to_remove_ids, desc="移除条目"):
-            update_index(
+            print(f"正在删除条目 ID: {subject_id}")
+            success = update_index(
                 config['indice_id'],
                 subject_id,
                 "",
@@ -437,7 +458,9 @@ def main():
                 config['access_token'],
                 is_add=False
             )
-            time.sleep(0.5)  # 添加延时避免请求过快
+            if not success:
+                print(f"警告: 删除条目 {subject_id} 失败")
+            time.sleep(0.5)
     
     # 添加或更新所有条目
     print("\n正在更新所有条目...")
