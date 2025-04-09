@@ -6,10 +6,6 @@ from tqdm import tqdm
 from datetime import datetime, timedelta, timezone
 import dateutil.parser
 
-# --- load_cache, save_cache, get_user_game_collections, get_game_collection_count ---
-# (Keep these functions as they are, assuming they still work for fetching data)
-# ... (previous code for these functions) ...
-
 def load_cache():
     """加载缓存数据"""
     try:
@@ -45,526 +41,447 @@ def get_user_game_collections(username, access_token=None):
         headers['Authorization'] = f'Bearer {access_token}'
         
     # API基础URL
-    base_url = 'https://api.bgm.tv/v0/users'
-    url = f"{base_url}/{username}/collections"
+    base_url = 'https://api.bgm.tv'
     
-    all_collections = []
+    # 初始化结果列表
+    all_games = []
     offset = 0
-    limit = 50 # Bangumi API v0 default/max limit per page is often 50
+    limit = 100  # API默认最大值
     
-    print("正在获取用户游戏收藏...")
+    print("正在获取用户收藏的游戏列表...")
     
-    # Use a loop with tqdm for progress
-    with tqdm(desc="获取收藏分页", unit=" 页") as pbar:
+    # 首次请求获取总数
+    url = f'{base_url}/v0/users/{username}/collections'
+    params = {
+        'subject_type': 4,
+        'offset': 0,
+        'limit': 1
+    }
+    response = requests.get(url, headers=headers, params=params)
+    if response.status_code != 200:
+        return []
+    total = response.json()['total']
+    
+    # 使用进度条获取所有数据
+    with tqdm(total=total, desc="获取游戏列表") as pbar:
         while True:
-            params = {
-                'subject_type': 4, # 4 = game
-                'limit': limit,
-                'offset': offset
-            }
-            try:
-                response = requests.get(url, headers=headers, params=params, timeout=20)
-                response.raise_for_status()  # Raise an exception for bad status codes
-                data = response.json()
-                
-                if not data or not data.get('data'):
-                    break # No more data
-                    
-                collections = data['data']
-                all_collections.extend(collections)
-                pbar.update(1) # Update progress bar by one page
-                
-                # Check if we've reached the end
-                if len(collections) < limit or data.get('total', 0) <= offset + len(collections):
-                     # If total is present and we've fetched >= total, stop.
-                     # Also stop if the returned items are fewer than the limit requested.
-                     break
-                     
-                offset += limit
-                time.sleep(0.5) # Respect API rate limits
-
-            except requests.exceptions.RequestException as e:
-                print(f"\n获取用户收藏时出错: {e}")
-                if response is not None:
-                    print(f"响应内容: {response.text}")
-                break # Stop trying on error
-            except json.JSONDecodeError:
-                print(f"\n无法解析服务器响应 (JSON): {response.text}")
+            params['limit'] = limit
+            params['offset'] = offset
+            response = requests.get(url, headers=headers, params=params)
+            
+            if response.status_code != 200:
                 break
-
-    print(f"获取完成，总共找到 {len(all_collections)} 条收藏记录.")
-    return all_collections
+                
+            data = response.json()
+            all_games.extend(data['data'])
+            
+            pbar.update(len(data['data']))
+            
+            if len(data['data']) < limit:
+                break
+                
+            offset += limit
+            time.sleep(0.5)  # 添加延时避免请求过快
+    
+    return all_games
 
 def get_game_collection_count(game_id, access_token=None, cache_data=None):
-    """获取指定游戏的全局'玩过'收藏数 (利用缓存)"""
+    """获取游戏的收藏统计信息（带缓存）"""
+    # 如果没有提供缓存数据，创建新的缓存
+    if cache_data is None:
+        cache_data = load_cache()
     
-    if cache_data and str(game_id) in cache_data.get('multi_collect_games', {}):
-        # print(f"游戏 {game_id} 在缓存中 (多于1人收藏)，跳过API查询.")
-        return cache_data['multi_collect_games'][str(game_id)]
-
-    # 读取配置 (只需要User-Agent)
-    try:
-        with open('config.json', 'r') as f:
-            config = json.load(f)
-        user_agent = config.get('user_agent', 'bgm-script/1.0')
-    except Exception as e:
-        print(f"警告: 读取config.json获取User-Agent失败: {e}")
-        user_agent = 'bgm-script/1.0' # Fallback
-
-    headers = {'User-Agent': user_agent}
-    if access_token: # May not be strictly needed for subject details, but good practice
-         headers['Authorization'] = f'Bearer {access_token}'
-
-    url = f"https://api.bgm.tv/v0/subjects/{game_id}"
-    count = 0
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-        count = data.get('collection', {}).get('collect', 0) # 获取 'collect' (玩过) 的数量
-
-        # 更新缓存（仅当数量大于1时）
-        if count > 1 and cache_data is not None:
-            if 'multi_collect_games' not in cache_data:
-                 cache_data['multi_collect_games'] = {}
-            cache_data['multi_collect_games'][str(game_id)] = count
-            save_cache(cache_data) # Save immediately after finding a multi-collect game
-
-        time.sleep(0.2) # Slightly shorter sleep for potentially faster checks
-
-    except requests.exceptions.RequestException as e:
-        print(f"\n获取游戏 {game_id} 收藏数时出错: {e}")
-        if response is not None:
-            print(f"响应内容: {response.text}")
-        # Return a high number on error to exclude it from unique list? Or 0? Let's return 0.
-        count = 0 # Assume 0 or error state
-    except json.JSONDecodeError:
-        print(f"\n无法解析游戏 {game_id} 的响应 (JSON): {response.text}")
-        count = 0
-    except Exception as e:
-        print(f"\n处理游戏 {game_id} 时发生未知错误: {e}")
-        count = 0
-
-    return count
-
-
-def get_index_items(index_id, access_token):
-    """获取目录中的所有条目ID和信息"""
+    # 检查缓存
+    game_id_str = str(game_id)
+    
+    # 如果游戏在多收藏缓存中直接返回
+    if game_id_str in cache_data['multi_collect_games']:
+        return cache_data['multi_collect_games'][game_id_str]
+    
+    # 如果缓存不存在，请求API
     with open('config.json', 'r') as f:
         config = json.load(f)
+        
+    headers = {
+        'User-Agent': config['user_agent']
+    }
+    if access_token:
+        headers['Authorization'] = f'Bearer {access_token}'
+        
+    url = f'https://api.bgm.tv/v0/subjects/{game_id}'
+    response = requests.get(url, headers=headers)
+    
+    if response.status_code != 200:
+        print(f"错误: 无法获取游戏 {game_id} 的信息")
+        return None
+        
+    data = response.json()
+    collect_count = data['collection'].get('collect', 0)
+    
+    # 如果收藏数大于1，更新缓存
+    if collect_count > 1:
+        cache_data['multi_collect_games'][game_id_str] = collect_count
+        save_cache(cache_data)
+    
+    return collect_count
+
+def get_index_items(index_id, access_token):
+    """获取目录中的所有条目"""
+    print("正在获取目录内容...")
+    with open('config.json', 'r') as f:
+        config = json.load(f)
+        
     headers = {
         'User-Agent': config['user_agent'],
         'Authorization': f'Bearer {access_token}'
     }
-    url = f"https://api.bgm.tv/v0/indices/{index_id}/subjects"
-    items = []
+    
+    all_items = []
     offset = 0
-    limit = 50
-    print("正在获取当前目录内容...")
-    with tqdm(desc="获取目录分页", unit=" 页") as pbar:
-        while True:
-            params = {'limit': limit, 'offset': offset}
-            try:
-                response = requests.get(url, headers=headers, params=params, timeout=20)
-                response.raise_for_status()
-                data = response.json()
+    limit = 30  # API默认限制
 
-                if not data or not data.get('data'):
-                     break
-
-                current_items = data['data']
-                items.extend(current_items)
-                pbar.update(1)
-
-                if len(current_items) < limit or data.get('total', 0) <= offset + len(current_items):
-                     break
-
-                offset += limit
-                time.sleep(0.5)
-            except requests.exceptions.RequestException as e:
-                print(f"\n获取目录 {index_id} 内容时出错: {e}")
-                if response is not None:
-                    print(f"响应内容: {response.text}")
-                return [] # Return empty list on error
-            except json.JSONDecodeError:
-                print(f"\n无法解析目录 {index_id} 响应 (JSON): {response.text}")
-                return []
-
-    print(f"获取完成，目录 {index_id} 当前包含 {len(items)} 个条目.")
-    return items
-
-# --- update_index function is NO LONGER USED by main flow ---
-# You can comment it out or remove it if not needed elsewhere.
-# def update_index(index_id, subject_id, comment, sort_order, access_token, is_add=True):
-#     # ... (old implementation) ...
-
-def format_time(timestamp):
-    """格式化时间戳"""
-    if not timestamp:
-        return "N/A"
-    try:
-        # Parse the ISO 8601 timestamp, which might have timezone info
-        dt_obj = dateutil.parser.isoparse(timestamp)
-        # Format without timezone info for simplicity
-        return dt_obj.strftime('%Y-%m-%d %H:%M')
-    except ValueError:
-        return "Invalid Date"
-    except Exception as e:
-        print(f"Error formatting time {timestamp}: {e}")
-        return "Error"
-
-
-def sort_games(games):
-    """对游戏列表进行排序：评分降序 -> 更新时间降序"""
-    def sort_key(game):
-        rate = game.get('rate', 0)
-        updated_at = game.get('updated_at', '')
-        # Parse updated_at for comparison, handle errors
-        try:
-            dt_updated = dateutil.parser.isoparse(updated_at) if updated_at else datetime.min.replace(tzinfo=timezone.utc)
-        except ValueError:
-            dt_updated = datetime.min.replace(tzinfo=timezone.utc) # Fallback for invalid format
-
-        # Return tuple for sorting: higher rate first, then more recent update first
-        # Negate rate for descending order; use datetime object directly for descending time
-        return (-rate, dt_updated)
-
-    return sorted(games, key=sort_key, reverse=True) # reverse=True on the tuple sorting handles time correctly
-
-
-# --- MODIFIED FUNCTION ---
-def batch_add_update_to_index(index_id, games, access_token):
-    """
-    使用 PATCH /v0/indices/{index_id}/subjects 批量添加或更新条目到目录.
-    会根据传入的 games 列表（已排序）设置 sort 和 comment.
-    """
-    if not games:
-        print("没有需要添加或更新的游戏。")
-        return 0
-
-    with open('config.json', 'r') as f:
-        config = json.load(f)
-    headers = {
-        'User-Agent': config['user_agent'],
-        'Authorization': f'Bearer {access_token}',
-        'Content-Type': 'application/json' # Important for PATCH/POST/DELETE with body
-    }
-    url = f"https://api.bgm.tv/v0/indices/{index_id}/subjects"
-
-    # 1. 排序 (现在在 main 函数外部完成，这里假设 games 列表已排序)
-    #    如果需要在函数内部排序，取消下面的注释
-    # print("正在对游戏进行排序...")
-    # sorted_games = sort_games(games)
-    sorted_games = games # Assume games are pre-sorted
-
-    # 2. 构建请求体 (payload)
-    payload_items = []
-    print("正在准备批量更新数据...")
-    for idx, game in enumerate(tqdm(sorted_games, desc="准备条目数据")):
-        subject = game.get('subject', {})
-        subject_id = subject.get('id')
-        if not subject_id:
-            print(f"警告: 游戏条目缺少 ID: {game}")
-            continue
-
-        rating = f"评分: {game.get('rate', 'N/A')}"
-        mark_time = f"时间: {format_time(game.get('updated_at'))}"
-        user_comment = game.get('comment', '').strip().replace('\r', ' ').replace('\n', ' ') # Clean comment
+    while True:
+        url = f'https://api.bgm.tv/v0/indices/{index_id}/subjects?limit={limit}&offset={offset}'
+        response = requests.get(url, headers=headers)
         
-        # 组合评论，如果用户有评论则添加
-        comment_parts = [rating, mark_time]
-        if user_comment:
-            comment_parts.append(f"吐槽: {user_comment}")
-        full_comment = " | ".join(comment_parts)
+        if response.status_code != 200:
+            print(f"错误: 无法获取目录内容 (状态码: {response.status_code})")
+            return []
+            
+        try:
+            data = response.json()
+            if not isinstance(data, dict) or 'data' not in data:
+                print("错误: 返回数据格式不正确")
+                return []
+                
+            items = data['data']
+            all_items.extend(items)
+            
+            # 检查是否还有更多数据
+            total = data.get('total', 0)
+            if offset + limit >= total:
+                break
+                
+            offset += limit
+            time.sleep(0.5)  # 添加延时避免请求过快
+            
+        except json.JSONDecodeError:
+            print("错误: 返回的不是有效的JSON数据")
+            return []
+            
+    return all_items
 
-        # sort 值基于列表中的顺序 (0-based index)
-        sort_order = idx
-
-        payload_items.append({
-            "subject_id": subject_id,
-            "comment": full_comment,
-            "sort": sort_order
-        })
-
-    if not payload_items:
-        print("没有有效的条目数据可以更新。")
-        return 0
-
-    # 3. 发送单个 PATCH 请求
-    print(f"正在发送批量更新请求 (共 {len(payload_items)} 个条目)...")
-    success_count = 0
-    try:
-        response = requests.patch(url, headers=headers, json=payload_items, timeout=60) # Increase timeout for batch ops
-
-        print(f"  请求 URL: {response.request.url}")
-        # print(f"  请求 Body: {json.dumps(payload_items, ensure_ascii=False, indent=2)}") # Uncomment for debugging
-
-        if response.status_code == 204: # No Content - Success for PATCH/DELETE often
-            print("批量更新成功！")
-            success_count = len(payload_items)
-        else:
-            print(f"批量更新失败。状态码: {response.status_code}")
-            try:
-                print(f"错误响应: {response.json()}")
-            except json.JSONDecodeError:
-                print(f"错误响应 (非JSON): {response.text}")
-            # Partial success is not indicated by API, assume all failed on non-204
-            success_count = 0
-
-    except requests.exceptions.RequestException as e:
-        print(f"批量更新时发生网络错误: {e}")
-        success_count = 0
-    except Exception as e:
-         print(f"批量更新时发生未知错误: {e}")
-         success_count = 0
-
-    # No need for sleep here as it's a single call, unless server has specific batch rate limits
-    # time.sleep(0.5)
-
-    return success_count
-
-# --- MODIFIED FUNCTION ---
-def batch_remove_from_index(index_id, subject_ids, access_token):
-    """
-    使用 DELETE /v0/indices/{index_id}/subjects 批量从目录移除条目.
-    """
-    if not subject_ids:
-        print("没有需要移除的条目。")
-        return True # Considered successful if nothing to do
-
+def update_index(index_id, subject_id, comment, sort_order, access_token, is_add=True):
+    """添加或编辑目录条目"""
     with open('config.json', 'r') as f:
         config = json.load(f)
-    headers = {
-        'User-Agent': config['user_agent'],
-        'Authorization': f'Bearer {access_token}',
-        'Content-Type': 'application/json' # Important for DELETE with body
-    }
-    url = f"https://api.bgm.tv/v0/indices/{index_id}/subjects"
-
-    # Convert set/list to list for JSON serialization
-    ids_to_remove = list(subject_ids)
-
-    print(f"正在发送批量删除请求 (共 {len(ids_to_remove)} 个条目)...")
-    success = False
-    try:
-        response = requests.delete(url, headers=headers, json=ids_to_remove, timeout=60)
-
-        print(f"  请求 URL: {response.request.url}")
-        # print(f"  请求 Body: {json.dumps(ids_to_remove)}") # Uncomment for debugging
-
-        if response.status_code == 204: # No Content - Success
-            print("批量删除成功！")
-            success = True
-        else:
-            print(f"批量删除失败。状态码: {response.status_code}")
-            try:
-                print(f"错误响应: {response.json()}")
-            except json.JSONDecodeError:
-                print(f"错误响应 (非JSON): {response.text}")
-            success = False
-
-    except requests.exceptions.RequestException as e:
-        print(f"批量删除时发生网络错误: {e}")
-        success = False
-    except Exception as e:
-         print(f"批量删除时发生未知错误: {e}")
-         success = False
-
-    return success
-
-
-def update_index_description(index_id, access_token):
-    """更新目录描述，添加或更新 '最近更新时间'"""
-    with open('config.json', 'r') as f:
-        config = json.load(f)
+        
     headers = {
         'User-Agent': config['user_agent'],
         'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/json'
     }
-    base_url = f"https://api.bgm.tv/v0/indices/{index_id}"
-
-    # 1. 获取当前目录信息
-    current_title = "AutoGen: Unique Played Games" # Default title if fetch fails
-    current_desc = ""
-    try:
-        response_get = requests.get(base_url, headers=headers, timeout=15)
-        response_get.raise_for_status()
-        data = response_get.json()
-        current_title = data.get('title', current_title)
-        current_desc = data.get('description', '')
-    except requests.exceptions.RequestException as e:
-        print(f"获取目录 {index_id} 信息失败: {e}")
-        # Continue with default title and empty description
-    except json.JSONDecodeError:
-         print(f"解析目录 {index_id} 信息响应失败: {response_get.text}")
-         # Continue
-    except Exception as e:
-        print(f"处理目录 {index_id} 信息时出错: {e}")
-        # Continue
-
-
-    # 2. 准备新的描述
-    # 使用北京时间 (UTC+8)
-    beijing_tz = timezone(timedelta(hours=8))
-    now_beijing = datetime.now(beijing_tz)
-    timestamp_str = now_beijing.strftime('%Y-%m-%d %H:%M:%S %Z')
-    update_line = f"最近更新时间：{timestamp_str}"
-
-    lines = current_desc.split('\n')
-    # 移除旧的更新时间行 (如果存在)
-    lines = [line for line in lines if not line.startswith("最近更新时间：")]
-    # 添加新的更新时间行到末尾
-    lines.append(update_line)
-    new_desc = "\n".join(lines).strip()
-
-    # 3. 发送 PUT 请求更新描述和标题
-    payload = {
-        "title": current_title, # Keep original title unless specified otherwise
-        "description": new_desc
-    }
-    print("正在更新目录描述...")
-    try:
-        response_put = requests.put(base_url, headers=headers, json=payload, timeout=30)
-
-        if response_put.status_code == 204:
-            print("目录描述更新成功！")
-            return True
-        else:
-            print(f"目录描述更新失败。状态码: {response_put.status_code}")
-            try:
-                print(f"错误响应: {response_put.json()}")
-            except json.JSONDecodeError:
-                print(f"错误响应 (非JSON): {response_put.text}")
+    
+    url = f'https://api.bgm.tv/v0/indices/{index_id}/subjects/{subject_id}'
+    
+    if is_add:
+        # 添加/编辑条目到目录
+        data = {
+            'comment': comment if comment else "",
+            'sort': sort_order  # 使用正确的字段名 'sort'
+        }
+        try:
+            response = requests.put(url, headers=headers, json=data)
+        except Exception as e:
+            print(f"错误: 请求失败 ({str(e)})")
             return False
-    except requests.exceptions.RequestException as e:
-        print(f"更新目录描述时发生网络错误: {e}")
+    else:
+        # 从目录中删除条目
+        response = requests.delete(url, headers=headers)
+    
+    if response.status_code not in [200, 204]:
+        print(f"错误: {'添加' if is_add else '删除'}条目失败 (状态码: {response.status_code})")
+        if response.text:
+            try:
+                error_data = response.json()
+                print(f"错误详情: {error_data}")
+            except:
+                print(f"错误详情: {response.text}")
         return False
-    except Exception as e:
-        print(f"更新目录描述时发生未知错误: {e}")
-        return False
+    
+    return True
 
+def format_time(timestamp):
+    """格式化时间为易读格式"""
+    try:
+        if isinstance(timestamp, str):
+            # 解析 ISO 8601 格式的时间字符串
+            dt = dateutil.parser.parse(timestamp)
+            return dt.strftime('%Y-%m-%d %H:%M')
+        return "未知时间"
+    except (ValueError, TypeError):
+        return "未知时间"
+
+def sort_games(games):
+    """对游戏进行排序：按评分从高到低，同评分按收藏时间由近到远"""
+    def get_sort_key(x):
+        rate = -(x.get('rate', 0) or 0)
+        try:
+            updated_at = -float(x.get('updated_at', 0))
+        except (ValueError, TypeError):
+            updated_at = 0
+        return (rate, updated_at)
+    
+    return sorted(games, key=get_sort_key)
+
+def batch_add_to_index(index_id, games, access_token):
+    """批量添加条目到目录"""
+    with open('config.json', 'r') as f:
+        config = json.load(f)
+        
+    headers = {
+        'User-Agent': config['user_agent'],
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json'
+    }
+    
+    url = f'https://api.bgm.tv/v0/indices/{index_id}/subjects'
+    
+    # 对游戏进行排序
+    sorted_games = sort_games(games)
+    
+    # 准备批量添加的数据
+    subjects = []
+    for order, game in enumerate(sorted_games, 1):
+        try:
+            comment_parts = []
+            if game.get('rate'):
+                comment_parts.append(f"评分: {game['rate']}")
+            if game.get('updated_at'):
+                comment_parts.append(f"标记时间: {format_time(game['updated_at'])}")
+            if game.get('comment'):
+                # 清理评论文本，移除特殊字符
+                cleaned_comment = game['comment'].replace('\n', ' ').replace('\r', ' ')
+                comment_parts.append(f"吐嘈: {cleaned_comment}")
+            comment = " | ".join(comment_parts)
+            
+            subjects.append({
+                'subject_id': game['subject']['id'],
+                'comment': comment,  # 移除长度限制
+                'sort': order
+            })
+        except Exception as e:
+            print(f"警告: 处理游戏数据时出错: {e}")
+            continue
+    
+    # 由于批量添加可能有问题，直接切换到逐个添加
+    print("正在逐个添加条目...")
+    success_count = 0
+    
+    with tqdm(subjects, desc="添加条目") as pbar:
+        for subject in pbar:
+            if update_index(
+                index_id,
+                subject['subject_id'],
+                subject['comment'],
+                subject['sort'],
+                access_token
+            ):
+                success_count += 1
+            else:
+                print(f"警告: 无法添加条目 ID {subject['subject_id']}")
+            time.sleep(0.5)  # 添加延时避免请求过快
+            
+            pbar.set_postfix({"成功": success_count})
+    
+    return success_count
+
+def update_index_description(index_id, access_token):
+    """更新目录描述，添加最后更新时间"""
+    with open('config.json', 'r') as f:
+        config = json.load(f)
+        
+    headers = {
+        'User-Agent': config['user_agent'],
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json'
+    }
+    
+    # 首先获取当前目录信息
+    url = f'https://api.bgm.tv/v0/indices/{index_id}'
+    response = requests.get(url, headers=headers)
+    
+    if response.status_code != 200:
+        print("错误: 无法获取目录信息")
+        return False
+        
+    index_info = response.json()
+    current_description = index_info.get('desc', '')
+    current_title = index_info.get('title', '')
+    
+    # 获取当前UTC时间并转换为北京时间
+    current_time_utc = datetime.now(timezone.utc)
+    current_time_beijing = current_time_utc.astimezone(timezone(timedelta(hours=8)))
+    update_line = f"最近更新时间：{current_time_beijing.strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    # 将描述分割成行，处理所有可能的换行符
+    lines = current_description.replace('\r\n', '\n').split('\n')
+    
+    # 检查最后一行是否包含更新时间
+    if lines and lines[-1].startswith("最近更新时间："):
+        lines[-1] = update_line
+    else:
+        lines.append(update_line)
+    
+    # 重新组合描述，使用单个换行符
+    new_description = '\n'.join(lines)
+    
+    # 更新目录描述
+    update_url = f'https://api.bgm.tv/v0/indices/{index_id}'
+    update_data = {
+        'title': current_title,
+        'description': new_description
+    }
+    
+    response = requests.put(update_url, headers=headers, json=update_data)
+    
+    if response.status_code not in [200, 204]:
+        print("错误: 更新目录描述失败")
+        if response.text:
+            try:
+                error_data = response.json()
+                print(f"错误详情: {error_data}")
+            except:
+                print(f"错误详情: {response.text}")
+        return False
+        
+    return True
 
 def main():
-    print("脚本开始运行...")
-    try:
-        with open('config.json', 'r') as f:
-            config = json.load(f)
-            # Validate essential config keys
-            required_keys = ['user_id', 'access_token', 'indice_id', 'user_agent']
-            if not all(key in config for key in required_keys):
-                print("错误: config.json 文件缺少必要的键 (user_id, access_token, indice_id, user_agent)")
-                return
-    except FileNotFoundError:
-        print("错误: 未找到 config.json 文件。请确保配置文件存在。")
-        return
-    except json.JSONDecodeError:
-        print("错误: config.json 文件格式无效。")
-        return
-    except Exception as e:
-        print(f"读取配置文件时发生错误: {e}")
-        return
-
-    cache_data = load_cache()
-
-    # 1. 获取用户所有游戏收藏
-    all_games = get_user_game_collections(config['user_id'], config['access_token'])
-    if not all_games:
-        print("未能获取用户游戏收藏，脚本终止。")
-        return
-
-    # 2. 筛选"玩过" (type == 2)
-    played_games = [game for game in all_games if game.get('type') == 2]
-    print(f"\n找到 {len(played_games)} 个标记为 '玩过' 的游戏。")
-    if not played_games:
-        print("没有找到 '玩过' 的游戏，脚本结束。")
-        # Optionally clear the index here if that's the desired behavior
-        return
-
-    # 3. 筛选全局收藏数为1的游戏
-    unique_games = []
-    print("正在检查游戏的全局收藏数 (玩过 > 1 的会使用缓存)...")
-    for game in tqdm(played_games, desc="筛选独特游戏"):
-        subject_id = game.get('subject', {}).get('id')
-        if not subject_id:
-            continue
-        
-        # 使用缓存优化检查
-        count = get_game_collection_count(subject_id, config.get('access_token'), cache_data) # Pass token if needed by count check
-
-        if count == 1:
-            unique_games.append(game)
-        # else:
-            # print(f"游戏 {subject_id} ({game.get('subject',{}).get('name')}) 全局收藏数: {count}, 已跳过.")
-
-
-    print(f"\n找到 {len(unique_games)} 个全局唯一收藏（玩过=1）的游戏。")
-
-    # 4. 获取当前目录内容
-    current_index_items = get_index_items(config['indice_id'], config['access_token'])
-    current_index_ids = {item['subject_id'] for item in current_index_items}
-    # print(f"当前目录中的条目 ID: {current_index_ids}")
-
-    # 5. 确定需要添加/更新和移除的条目
-    new_game_ids = {game['subject']['id'] for game in unique_games}
-
-    to_remove_ids = current_index_ids - new_game_ids
-    print(f"\n需要从目录移除的条目 ID ({len(to_remove_ids)}个): {to_remove_ids if to_remove_ids else '无'}")
-
-    # 所有 unique_games 都需要被加入或更新其信息 (评论/排序)
-    # 在使用 PATCH 时，即使条目已存在，也会更新其 comment 和 sort
-    to_add_update_games = unique_games
-    # 先排序，以便 batch_add_update_to_index 可以直接使用顺序作为 sort 值
-    print("\n正在排序需要添加/更新的游戏...")
-    sorted_games_to_update = sort_games(to_add_update_games)
+    # 读取配置
+    with open('config.json', 'r') as f:
+        config = json.load(f)
     
-    print("\n准备更新的游戏:")
-    if sorted_games_to_update:
-        for idx, game in enumerate(sorted_games_to_update):
-             print(f"  {idx+1}. ID: {game['subject']['id']} ({game['subject'].get('name', '未知名称')}) Rate: {game.get('rate', 'N/A')} @ {format_time(game.get('updated_at'))}")
-    else:
-        print("  无")
-
-
-    # 6. 执行移除操作 (使用批量删除)
+    print("开始处理...\n")
+    
+    # 加载缓存
+    cache_data = load_cache()
+    print("已加载缓存数据")
+    
+    # 获取用户收藏的游戏
+    games = get_user_game_collections(
+        username=config['user_id'],
+        access_token=config['access_token']
+    )
+    
+    # 筛选"玩过"的游戏
+    completed_games = [game for game in games if game['type'] == 2]
+    
+    print(f"\n用户 {config['user_id']} 共玩过 {len(completed_games)} 个游戏")
+    print("正在检查每个游戏的收藏数量...\n")
+    
+    # 获取符合条件的游戏列表（只被标记"玩过"一次）
+    unique_games = []
+    skipped_count = 0
+    
+    with tqdm(completed_games, desc="检查游戏收藏数") as pbar:
+        for game in pbar:
+            subject = game['subject']
+            game_id_str = str(subject['id'])
+            
+            # 更新进度条描述
+            pbar.set_description(f"检查游戏 {subject['name'][:20]}")
+            
+            # 检查缓存中是否已确认为多收藏游戏
+            if game_id_str in cache_data['multi_collect_games']:
+                skipped_count += 1
+                pbar.set_postfix(skipped=skipped_count)
+                continue
+            
+            collect_count = get_game_collection_count(
+                subject['id'], 
+                config['access_token'],
+                cache_data
+            )
+            
+            if collect_count == 1:
+                unique_games.append(game)
+            
+            time.sleep(0.5)  # 添加延时避免请求过快
+    
+    print(f"\n找到 {len(unique_games)} 个符合条件的游戏")
+    print(f"跳过了 {skipped_count} 个已缓存的多收藏游戏")
+    
+    # 获取目录中的现有条目
+    current_index_items = get_index_items(config['indice_id'], config['access_token'])
+    
+    # 获取现有条目ID（添加更多调试信息）
+    current_index_ids = set()
+    print("\n当前目录中的条目:")
+    for item in current_index_items:
+        try:
+            if isinstance(item, dict):
+                subject_id = item.get('id')  # 注意：API返回的是'id'而不是'subject_id'
+                if subject_id:
+                    current_index_ids.add(subject_id)
+                    print(f"- ID: {subject_id} ({item.get('name', '未知名称')})")
+            else:
+                print(f"警告: 目录条目格式错误: {item}")
+        except Exception as e:
+            print(f"警告: 处理目录条目时出错: {e}")
+            print(f"问题条目内容: {item}")
+            continue
+    
+    # 获取要添加的游戏ID列表
+    new_game_ids = set(game['subject']['id'] for game in unique_games)
+    print("\n准备添加的游戏:")
+    for game in unique_games:
+        print(f"- ID: {game['subject']['id']} ({game['subject'].get('name', '未知名称')})")
+    
+    # 需要移除的条目
+    to_remove_ids = current_index_ids - new_game_ids
+    print(f"\n需要移除的条目: {to_remove_ids}")
+    
+    # 需要添加或更新的条目
+    to_update_games = unique_games  # 所有游戏都需要更新
+    
+    # 移除不再符合条件的条目
     if to_remove_ids:
-        print(f"\n正在执行批量移除 ({len(to_remove_ids)} 个条目)...")
-        remove_success = batch_remove_from_index(
-            config['indice_id'],
-            to_remove_ids,
-            config['access_token']
-        )
-        if not remove_success:
-            print("警告: 批量移除操作未完全成功。")
-        # No need for sleep as it's a single call
-    else:
-        print("\n无需移除条目。")
-
-
-    # 7. 执行添加/更新操作 (使用批量修改)
-    print(f"\n正在执行批量添加/更新 ({len(sorted_games_to_update)} 个条目)...")
-    update_success_count = batch_add_update_to_index(
+        print(f"\n正在移除 {len(to_remove_ids)} 个不再符合条件的条目...")
+        for subject_id in tqdm(to_remove_ids, desc="移除条目"):
+            print(f"正在删除条目 ID: {subject_id}")
+            success = update_index(
+                config['indice_id'],
+                subject_id,
+                "",
+                0,
+                config['access_token'],
+                is_add=False
+            )
+            if not success:
+                print(f"警告: 删除条目 {subject_id} 失败")
+            time.sleep(0.5)
+    
+    # 添加或更新所有条目
+    print("\n正在更新所有条目...")
+    success_count = batch_add_to_index(
         config['indice_id'],
-        sorted_games_to_update, # Pass the pre-sorted list
+        to_update_games,
         config['access_token']
     )
-    print(f"批量添加/更新操作完成，成功处理 {update_success_count} 个条目。")
-
-
-    # 8. 更新目录描述
-    print("\n正在更新目录描述中的时间戳...")
-    desc_update_success = update_index_description(config['indice_id'], config['access_token'])
-    if desc_update_success:
-        print("目录描述更新成功。")
+    
+    print(f"\n成功更新 {success_count} 个条目")
+    
+    # 更新目录描述
+    print("\n正在更新目录描述...")
+    if update_index_description(config['indice_id'], config['access_token']):
+        print("目录描述更新成功")
     else:
-        print("目录描述更新失败。")
-
-    # 9. 保存可能已更新的缓存
-    print("\n正在保存缓存...")
-    save_cache(cache_data)
-
-    print("\n脚本执行完毕。")
-
+        print("警告: 目录描述更新失败")
+    
+    print("\n目录更新完成！")
+    print(f"- 删除了 {len(to_remove_ids)} 个条目")
+    print(f"- 添加了 {len(to_update_games)} 个条目")
 
 if __name__ == "__main__":
     main()
